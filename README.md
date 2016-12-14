@@ -4,7 +4,7 @@
 
 ## Building and Installing
 
-First, download and install the folly library from https://github.com/facebook/folly/
+First, download and install the folly library from https://github.com/SocialExplorerFork/folly/
 You'll also need cmake.
 Once folly is installed, run the following inside the wangle directory to build, test, and install wangle:
 ```
@@ -30,7 +30,7 @@ See the CONTRIBUTING file for how to help out.
 
 ## Documentation
 
-<p>Wangle interfaces are asynchronous.  Interfaces are currently based on <a href="https://github.com/facebook/folly/tree/master/folly/futures">Futures</a>, but we&#039;re also exploring how to support fibers</p>
+<p>Wangle interfaces are asynchronous.  Interfaces are currently based on <a href="https://github.com/SocialExplorerFork/folly/tree/master/folly/futures">Futures</a>, but we&#039;re also exploring how to support fibers</p>
 
 <h2 id="client-server-abstractio">Client / Server abstraction <a href="#client-server-abstractio" class="headerLink">#</a></h2>
 

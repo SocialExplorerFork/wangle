@@ -112,7 +112,7 @@ if(BUILD_TESTS)
 # Download and install GoogleMock
   ExternalProject_Add(
       gtest
-      GIT_REPOSITORY https://github.com/google/googletest.git
+      GIT_REPOSITORY https://github.com/SocialExplorerFork/googletest.git
       GIT_TAG release-1.8.0
       PREFIX gtest
       # Disable install step
