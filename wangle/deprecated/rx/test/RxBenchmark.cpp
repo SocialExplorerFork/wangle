@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include <folly/Benchmark.h>
@@ -17,11 +23,11 @@ using namespace wangle;
 using folly::BenchmarkSuspender;
 
 static std::unique_ptr<Observer<int>> makeObserver() {
-  return Observer<int>::create([&] (int x) {});
+  return Observer<int>::create([&] (int) {});
 }
 
-void subscribeImpl(uint iters, int N, bool countUnsubscribe) {
-  for (uint iter = 0; iter < iters; iter++) {
+void subscribeImpl(uint32_t iters, int N, bool countUnsubscribe) {
+  for (uint32_t iter = 0; iter < iters; iter++) {
     BenchmarkSuspender bs;
     Subject<int> subject;
     std::vector<std::unique_ptr<Observer<int>>> observers;
@@ -41,16 +47,16 @@ void subscribeImpl(uint iters, int N, bool countUnsubscribe) {
   }
 }
 
-void subscribeAndUnsubscribe(uint iters, int N) {
+void subscribeAndUnsubscribe(uint32_t iters, int N) {
   subscribeImpl(iters, N, true);
 }
 
-void subscribe(uint iters, int N) {
+void subscribe(uint32_t iters, int N) {
   subscribeImpl(iters, N, false);
 }
 
-void observe(uint iters, int N) {
-  for (uint iter = 0; iter < iters; iter++) {
+void observe(uint32_t iters, int N) {
+  for (uint32_t iter = 0; iter < iters; iter++) {
     BenchmarkSuspender bs;
     Subject<int> subject;
     std::vector<std::unique_ptr<Observer<int>>> observers;
@@ -65,8 +71,8 @@ void observe(uint iters, int N) {
   }
 }
 
-void inlineObserve(uint iters, int N) {
-  for (uint iter = 0; iter < iters; iter++) {
+void inlineObserve(uint32_t iters, int N) {
+  for (uint32_t iter = 0; iter < iters; iter++) {
     BenchmarkSuspender bs;
     Subject<int> subject;
     std::vector<Observer<int>*> observers;
@@ -84,8 +90,8 @@ void inlineObserve(uint iters, int N) {
   }
 }
 
-void notifySubscribers(uint iters, int N) {
-  for (uint iter = 0; iter < iters; iter++) {
+void notifySubscribers(uint32_t iters, int N) {
+  for (uint32_t iter = 0; iter < iters; iter++) {
     BenchmarkSuspender bs;
     Subject<int> subject;
     std::vector<std::unique_ptr<Observer<int>>> observers;
@@ -103,8 +109,8 @@ void notifySubscribers(uint iters, int N) {
   }
 }
 
-void notifyInlineObservers(uint iters, int N) {
-  for (uint iter = 0; iter < iters; iter++) {
+void notifyInlineObservers(uint32_t iters, int N) {
+  for (uint32_t iter = 0; iter < iters; iter++) {
     BenchmarkSuspender bs;
     Subject<int> subject;
     std::vector<Observer<int>*> observers;
@@ -120,27 +126,27 @@ void notifyInlineObservers(uint iters, int N) {
   }
 }
 
-BENCHMARK_PARAM(subscribeAndUnsubscribe, 1);
-BENCHMARK_RELATIVE_PARAM(subscribe, 1);
-BENCHMARK_RELATIVE_PARAM(observe, 1);
-BENCHMARK_RELATIVE_PARAM(inlineObserve, 1);
+BENCHMARK_PARAM(subscribeAndUnsubscribe, 1)
+BENCHMARK_RELATIVE_PARAM(subscribe, 1)
+BENCHMARK_RELATIVE_PARAM(observe, 1)
+BENCHMARK_RELATIVE_PARAM(inlineObserve, 1)
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_PARAM(subscribeAndUnsubscribe, 1000);
-BENCHMARK_RELATIVE_PARAM(subscribe, 1000);
-BENCHMARK_RELATIVE_PARAM(observe, 1000);
-BENCHMARK_RELATIVE_PARAM(inlineObserve, 1000);
+BENCHMARK_PARAM(subscribeAndUnsubscribe, 1000)
+BENCHMARK_RELATIVE_PARAM(subscribe, 1000)
+BENCHMARK_RELATIVE_PARAM(observe, 1000)
+BENCHMARK_RELATIVE_PARAM(inlineObserve, 1000)
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_PARAM(notifySubscribers, 1);
-BENCHMARK_RELATIVE_PARAM(notifyInlineObservers, 1);
+BENCHMARK_PARAM(notifySubscribers, 1)
+BENCHMARK_RELATIVE_PARAM(notifyInlineObservers, 1)
 
 BENCHMARK_DRAW_LINE();
 
-BENCHMARK_PARAM(notifySubscribers, 1000);
-BENCHMARK_RELATIVE_PARAM(notifyInlineObservers, 1000);
+BENCHMARK_PARAM(notifySubscribers, 1000)
+BENCHMARK_RELATIVE_PARAM(notifyInlineObservers, 1000)
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);

@@ -1,89 +1,53 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include <wangle/acceptor/PeekingAcceptorHandshakeHelper.h>
 
 #include <thread>
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 
 #include <folly/io/async/test/MockAsyncSSLSocket.h>
+#include <folly/portability/GMock.h>
+#include <folly/portability/GTest.h>
+#include <wangle/acceptor/test/AcceptorHelperMocks.h>
 
 using namespace folly;
 using namespace folly::test;
 using namespace wangle;
 using namespace testing;
 
-class MockPeekingCallback :
-  public PeekingAcceptorHandshakeHelper::PeekCallback {
-  public:
-    using PeekingAcceptorHandshakeHelper::PeekCallback::PeekCallback;
-
-    MOCK_METHOD5_T(getHelperInternal,
-        AcceptorHandshakeHelper*(
-            const std::vector<uint8_t>&,
-            Acceptor*,
-            const folly::SocketAddress&,
-            std::chrono::steady_clock::time_point,
-            TransportInfo&));
-
-    virtual AcceptorHandshakeHelper::UniquePtr getHelper(
-        const std::vector<uint8_t>& peekedBytes,
-        Acceptor* acceptor,
-        const folly::SocketAddress& clientAddr,
-        std::chrono::steady_clock::time_point acceptTime,
-        TransportInfo& tinfo) override {
-      return AcceptorHandshakeHelper::UniquePtr(getHelperInternal(
-            peekedBytes, acceptor, clientAddr, acceptTime, tinfo));
-    }
-};
-
-class MockHandshakeHelperCallback : public AcceptorHandshakeHelper::Callback {
-  public:
-
-    GMOCK_METHOD3_(, noexcept, , connectionReadyInternal,
-        void(
-          std::shared_ptr<AsyncTransportWrapper> transport,
-          std::string nextProtocol,
-          SecureTransportType secureTransportType));
-
-    virtual void connectionReady(
-        folly::AsyncTransportWrapper::UniquePtr transport,
-        std::string nextProtocol,
-        SecureTransportType secureTransportType) noexcept override {
-      connectionReadyInternal(
-          std::shared_ptr<AsyncTransportWrapper>(std::move(transport)),
-          nextProtocol,
-          secureTransportType);
-    }
-
-    GMOCK_METHOD1_(, noexcept, , connectionError,
-        void(const folly::exception_wrapper));
-};
-
-class MockHandshakeHelper : public AcceptorHandshakeHelper {
+class MockPeekingCallback
+    : public PeekingAcceptorHandshakeHelper::PeekCallback {
  public:
-  GMOCK_METHOD2_(, noexcept, , startInternal,
-      void(
-        std::shared_ptr<AsyncSSLSocket> sock,
-        AcceptorHandshakeHelper::Callback* callback));
+  using PeekingAcceptorHandshakeHelper::PeekCallback::PeekCallback;
 
-  virtual void start(
-      folly::AsyncSSLSocket::UniquePtr sock,
-      AcceptorHandshakeHelper::Callback* callback) noexcept override {
-    startInternal(std::shared_ptr<AsyncSSLSocket>(std::move(sock)), callback);
+  MOCK_METHOD4_T(
+      getHelperInternal,
+      AcceptorHandshakeHelper*(
+          const std::vector<uint8_t>&,
+          const folly::SocketAddress&,
+          std::chrono::steady_clock::time_point,
+          TransportInfo&));
+
+  wangle::AcceptorHandshakeHelper::UniquePtr getHelper(
+      const std::vector<uint8_t>& peekedBytes,
+      const folly::SocketAddress& clientAddr,
+      std::chrono::steady_clock::time_point acceptTime,
+      TransportInfo& tinfo) override {
+    return wangle::AcceptorHandshakeHelper::UniquePtr(
+        getHelperInternal(peekedBytes, clientAddr, acceptTime, tinfo));
   }
-
-  MOCK_METHOD1(dropConnection,
-      void(
-        SSLErrorEnum reason));
-
 };
 
 class PeekingAcceptorHandshakeHelperTest : public Test {
@@ -99,14 +63,13 @@ class PeekingAcceptorHandshakeHelperTest : public Test {
       peekCallbacks_.push_back(&mockPeekCallback2_);
 
       helper_ = new PeekingAcceptorHandshakeHelper(
-            nullptr,
             sa_,
             std::chrono::steady_clock::now(),
             tinfo_,
             peekCallbacks_,
             2);
 
-      innerHelper_ = new MockHandshakeHelper();
+      innerHelper_ = new MockHandshakeHelper<>();
       helperPtr_ = AcceptorHandshakeHelper::UniquePtr(innerHelper_);
     }
 
@@ -122,9 +85,9 @@ class PeekingAcceptorHandshakeHelperTest : public Test {
     MockPeekingCallback mockPeekCallback1_{2};
     MockPeekingCallback mockPeekCallback2_{1};
     std::vector<PeekingCallbackPtr> peekCallbacks_;
-    MockHandshakeHelper* innerHelper_;
+    MockHandshakeHelper<UseSharedPtrPolicy>* innerHelper_;
     AcceptorHandshakeHelper::UniquePtr helperPtr_;
-    StrictMock<MockHandshakeHelperCallback> callback_;
+    StrictMock<MockHandshakeHelperCallback<>> callback_;
     TransportInfo tinfo_;
     SocketAddress sa_;
 };
@@ -135,7 +98,7 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestPeekSuccess) {
   std::vector<uint8_t> buf(2);
   buf[0] = 0x16;
   buf[1] = 0x03;
-  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(helperPtr_.release()));
   EXPECT_CALL(*innerHelper_, startInternal(_, _));
   helper_->peekSuccess(buf);
@@ -147,11 +110,11 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestPeekNonSuccess) {
   std::vector<uint8_t> buf(2);
   buf[0] = 0x16;
   buf[1] = 0x03;
-  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(nullptr));
-  EXPECT_CALL(mockPeekCallback2_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback2_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(nullptr));
-  EXPECT_CALL(callback_, connectionError(_));
+  EXPECT_CALL(callback_, connectionError_(_, _, _));
   helper_->peekSuccess(buf);
 }
 
@@ -161,9 +124,9 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestPeek2ndSuccess) {
   std::vector<uint8_t> buf(2);
   buf[0] = 0x16;
   buf[1] = 0x03;
-  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(nullptr));
-  EXPECT_CALL(mockPeekCallback2_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback2_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(helperPtr_.release()));
   EXPECT_CALL(*innerHelper_, startInternal(_, _));
   helper_->peekSuccess(buf);
@@ -175,7 +138,7 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestEOFDuringPeek) {
   EXPECT_CALL(*sslSock_, setReadCB(_))
     .WillOnce(SaveArg<0>(&rcb));
   EXPECT_CALL(*sslSock_, setReadCB(nullptr));
-  EXPECT_CALL(callback_, connectionError(_));
+  EXPECT_CALL(callback_, connectionError_(_, _, _));
   helper_->start(std::move(sockPtr_), &callback_);
   ASSERT_TRUE(rcb);
   rcb->readEOF();
@@ -183,7 +146,7 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestEOFDuringPeek) {
 
 TEST_F(PeekingAcceptorHandshakeHelperTest, TestPeekErr) {
   helper_->start(std::move(sockPtr_), &callback_);
-  EXPECT_CALL(callback_, connectionError(_));
+  EXPECT_CALL(callback_, connectionError_(_, _, _));
   helper_->peekError(AsyncSocketException(
         AsyncSocketException::AsyncSocketExceptionType::END_OF_FILE,
           "Unit test"));
@@ -196,7 +159,7 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestDropDuringPeek) {
     helper_->peekError(AsyncSocketException(
         AsyncSocketException::AsyncSocketExceptionType::UNKNOWN, "unit test"));
   }));
-  EXPECT_CALL(callback_, connectionError(_));
+  EXPECT_CALL(callback_, connectionError_(_, _, _));
   helper_->dropConnection();
 }
 
@@ -207,7 +170,7 @@ TEST_F(PeekingAcceptorHandshakeHelperTest, TestDropAfterPeek) {
   buf[0] = 0x16;
   buf[1] = 0x03;
 
-  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _, _))
+  EXPECT_CALL(mockPeekCallback1_, getHelperInternal(_, _, _, _))
     .WillOnce(Return(helperPtr_.release()));
   EXPECT_CALL(*innerHelper_, startInternal(_, _));
   helper_->peekSuccess(buf);

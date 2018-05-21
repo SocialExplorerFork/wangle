@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include <wangle/acceptor/TransportInfo.h>
 
@@ -20,61 +26,75 @@ using std::string;
 namespace wangle {
 
 bool TransportInfo::initWithSocket(const folly::AsyncSocket* sock) {
-#if defined(__linux__) || defined(__FreeBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
   if (!TransportInfo::readTcpInfo(&tcpinfo, sock)) {
     tcpinfoErrno = errno;
     return false;
   }
-  rtt = microseconds(tcpinfo.tcpi_rtt);
-  cwnd = tcpinfo.tcpi_snd_cwnd;
-  mss = tcpinfo.tcpi_snd_mss;
-  /* The ratio of packet retransmission (rtx) is a good indicator of network
-   * bandwidth condition. Unfortunately, the number of segmentOut is not
-   * available in current tcpinfo.  To workaround this limitation, totalBytes
-   * and MSS are used to estimate it.
-   */
-#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 17
-  if (tcpinfo.tcpi_total_retrans == 0) {
-    rtx = 0;
-  } else if (tcpinfo.tcpi_total_retrans > 0 && tcpinfo.tcpi_snd_mss > 0 &&
-      totalBytes > 0) {
-    // numSegmentOut is the underestimation of the number of tcp packets sent
-    double numSegmentOut = double(totalBytes) / tcpinfo.tcpi_snd_mss;
-    // so rtx is the overestimation of actual packet retransmission rate
-    rtx = tcpinfo.tcpi_total_retrans / numSegmentOut;
-  } else {
-    rtx = -1;
+#ifdef __APPLE__
+  rtt = microseconds(tcpinfo.tcpi_srtt * 1000);
+  rtt_var = tcpinfo.tcpi_rttvar * 1000;
+  rto = tcpinfo.tcpi_rto * 1000;
+  rtx_tm = -1;
+  mss = tcpinfo.tcpi_maxseg;
+  cwndBytes = tcpinfo.tcpi_snd_cwnd;
+  if (mss > 0) {
+    cwnd = (cwndBytes + mss - 1) / mss;
   }
 #else
-    rtx = -1;
+  rtt = microseconds(tcpinfo.tcpi_rtt);
+  rtt_var = tcpinfo.tcpi_rttvar;
+  rto = tcpinfo.tcpi_rto;
+  rtx_tm = tcpinfo.tcpi_retransmits;
+  mss = tcpinfo.tcpi_snd_mss;
+  cwnd = tcpinfo.tcpi_snd_cwnd;
+  cwndBytes = cwnd * mss;
+#endif // __APPLE__
+  ssthresh = tcpinfo.tcpi_snd_ssthresh;
+#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 17
+  rtx = tcpinfo.tcpi_total_retrans;
+#else
+  rtx = -1;
 #endif  // __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 17
   validTcpinfo = true;
 #else
   tcpinfoErrno = EINVAL;
   rtt = microseconds(-1);
+  rtt_var = -1;
   rtx = -1;
+  rtx_tm = -1;
+  rto = -1;
   cwnd = -1;
   mss = -1;
+  ssthresh = -1;
 #endif
   return true;
 }
 
 int64_t TransportInfo::readRTT(const folly::AsyncSocket* sock) {
-#if defined(__linux__) || defined(__FreeBSD__)
-  struct tcp_info tcpinfo;
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+  tcp_info tcpinfo;
   if (!TransportInfo::readTcpInfo(&tcpinfo, sock)) {
     return -1;
   }
+#endif
+#if defined(__linux__) || defined(__FreeBSD__)
   return tcpinfo.tcpi_rtt;
+#elif defined(__APPLE__)
+  return tcpinfo.tcpi_srtt;
 #else
   return -1;
 #endif
 }
 
-#if defined(__linux__) || defined(__FreeBSD__)
-bool TransportInfo::readTcpInfo(struct tcp_info* tcpinfo,
+#ifdef __APPLE__
+#define TCP_INFO TCP_CONNECTION_INFO
+#endif
+
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+bool TransportInfo::readTcpInfo(tcp_info* tcpinfo,
                                 const folly::AsyncSocket* sock) {
-  socklen_t len = sizeof(struct tcp_info);
+  socklen_t len = sizeof(tcp_info);
   if (!sock) {
     return false;
   }

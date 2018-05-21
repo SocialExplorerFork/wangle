@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #pragma once
 
@@ -62,7 +68,7 @@ class Acceptor :
   };
 
   explicit Acceptor(const ServerSocketConfig& accConfig);
-  virtual ~Acceptor();
+  ~Acceptor() override;
 
   /**
    * Supply an SSL cache provider
@@ -87,7 +93,7 @@ class Acceptor :
   /**
    * Recreates ssl configs, re-reads certs
    */
-  void resetSSLContextConfigs();
+  virtual void resetSSLContextConfigs();
 
   /**
    * Dynamically add a new SSLContextConfig
@@ -97,6 +103,14 @@ class Acceptor :
   SSLContextManager* getSSLContextManager() const {
     return sslCtxManager_.get();
   }
+
+  /**
+   * Sets TLS ticket secrets to use, or updates previously set secrets.
+   */
+  virtual void setTLSTicketSecrets(
+      const std::vector<std::string>& oldSecrets,
+      const std::vector<std::string>& currentSecrets,
+      const std::vector<std::string>& newSecrets);
 
   /**
    * Return the number of outstanding connections in this service instance.
@@ -222,6 +236,11 @@ class Acceptor :
   void drainAllConnections();
 
   /**
+   * Drain defined percentage of connections.
+   */
+  virtual void drainConnections(double pctToDrain);
+
+  /**
    * Drop all connections.
    *
    * forceStop() schedules dropAllConnections() to be called in the acceptor's
@@ -230,9 +249,13 @@ class Acceptor :
   void dropAllConnections();
 
   /**
-   * Drop defined percentage of connections.
+   * Force-drop "pct" (0.0 to 1.0) of remaining client connections,
+   * regardless of whether they are busy or idle.
+   *
+   * Note: unlike dropAllConnections(), this function can be called
+   * from any thread.
    */
-  void drainConnections(double pctToDrain);
+  virtual void dropConnections(double pctToDrop);
 
   /**
    * Wrapper for connectionReady() that can be overridden by
@@ -275,16 +298,13 @@ class Acceptor :
 
   /**
    * Hook for subclasses to record stats about SSL connection establishment.
+   *
+   * sock may be nullptr.
    */
   virtual void updateSSLStats(
       const folly::AsyncTransportWrapper* /*sock*/,
       std::chrono::milliseconds /*acceptLatency*/,
-      SSLErrorEnum /*error*/,
-      SecureTransportType /*type*/ = SecureTransportType::TLS) noexcept {}
-
-  bool getParseClientHello() {
-    return parseClientHello_;
-  }
+      SSLErrorEnum /*error*/) noexcept {}
 
  protected:
 
@@ -299,6 +319,9 @@ class Acceptor :
 
   virtual uint64_t getConnectionCountForLoadShedding(void) const { return 0; }
   virtual uint64_t getActiveConnectionCountForLoadShedding() const { return 0; }
+  virtual uint64_t getWorkerMaxConnections() const {
+    return connectionCounter_->getMaxConnections();
+  }
 
   /**
    * Hook for subclasses to drop newly accepted connections prior
@@ -330,12 +353,13 @@ class Acceptor :
       SecureTransportType /*secureTransportType*/,
       const TransportInfo& /*tinfo*/) {}
 
-  void onListenStarted() noexcept {}
-  void onListenStopped() noexcept {}
+  void onListenStarted() noexcept override {}
+  void onListenStopped() noexcept override {}
   void onDataAvailable(
-    std::shared_ptr<folly::AsyncUDPSocket> /*socket*/,
-    const folly::SocketAddress&,
-    std::unique_ptr<folly::IOBuf>, bool) noexcept {}
+      std::shared_ptr<folly::AsyncUDPSocket> /*socket*/,
+      const folly::SocketAddress&,
+      std::unique_ptr<folly::IOBuf>,
+      bool) noexcept override {}
 
   virtual folly::AsyncSocket::UniquePtr makeNewAsyncSocket(
       folly::EventBase* base,
@@ -367,16 +391,16 @@ class Acceptor :
   virtual void onConnectionsDrained() {}
 
   // AsyncServerSocket::AcceptCallback methods
-  void connectionAccepted(int fd,
-      const folly::SocketAddress& clientAddr)
-      noexcept;
-  void acceptError(const std::exception& ex) noexcept;
-  void acceptStopped() noexcept;
+  void connectionAccepted(
+      int fd,
+      const folly::SocketAddress& clientAddr) noexcept override;
+  void acceptError(const std::exception& ex) noexcept override;
+  void acceptStopped() noexcept override;
 
   // ConnectionManager::Callback methods
-  void onEmpty(const wangle::ConnectionManager& cm);
-  void onConnectionAdded(const wangle::ConnectionManager& /*cm*/) {}
-  void onConnectionRemoved(const wangle::ConnectionManager& /*cm*/) {}
+  void onEmpty(const wangle::ConnectionManager& cm) override;
+  void onConnectionAdded(const wangle::ConnectionManager& /*cm*/) override {}
+  void onConnectionRemoved(const wangle::ConnectionManager& /*cm*/) override {}
 
   const LoadShedConfiguration& getLoadShedConfiguration() const {
     return loadShedConfig_;
@@ -386,6 +410,10 @@ class Acceptor :
   const ServerSocketConfig accConfig_;
   void setLoadShedConfig(const LoadShedConfiguration& from,
                          IConnectionCounter* counter);
+
+  // Helper function to initialize downstreamConnectionManager_
+  virtual void initDownstreamConnectionManager(folly::EventBase* eventBase);
+
 
   /**
    * Socket options to apply to the client socket
@@ -402,13 +430,9 @@ class Acceptor :
   TLSPlaintextPeekingCallback tlsPlaintextPeekingCallback_;
   DefaultToSSLPeekingCallback defaultPeekingCallback_;
 
-  /**
-   * Whether we want to enable client hello parsing in the handshake helper
-   * to get list of supported client ciphers.
-   */
-  bool parseClientHello_{false};
-
   wangle::ConnectionManager::UniquePtr downstreamConnectionManager_;
+
+  std::shared_ptr<SSLCacheProvider> cacheProvider_;
 
  private:
 
@@ -426,7 +450,6 @@ class Acceptor :
   bool forceShutdownInProgress_{false};
   LoadShedConfiguration loadShedConfig_;
   IConnectionCounter* connectionCounter_{nullptr};
-  std::shared_ptr<SSLCacheProvider> cacheProvider_;
   std::chrono::milliseconds gracefulShutdownTimeout_{5000};
 };
 

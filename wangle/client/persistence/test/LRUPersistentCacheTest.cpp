@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include <chrono>
 #include <thread>
@@ -13,7 +19,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <folly/Baton.h>
+#include <folly/synchronization/Baton.h>
 #include <folly/Memory.h>
 #include <folly/futures/Future.h>
 #include <wangle/client/persistence/LRUPersistentCache.h>
@@ -36,13 +42,13 @@ static shared_ptr<LRUPersistentCache<string, string, T>> createCache(
     std::unique_ptr<TestPersistenceLayer> persistence = nullptr) {
   using TestCache = LRUPersistentCache<string, string, T>;
   return std::make_shared<TestCache>(
-      capacity, chrono::milliseconds(syncMillis), 3, std::move(persistence));
+      capacity, std::chrono::milliseconds(syncMillis), 3, std::move(persistence));
 }
 
 class MockPersistenceLayer : public TestPersistenceLayer {
   public:
-    virtual ~MockPersistenceLayer() {
-      LOG(ERROR) << "ok.";
+   ~MockPersistenceLayer() override {
+     LOG(ERROR) << "ok.";
     }
     bool persist(const dynamic& obj) noexcept override {
       return persist_(obj);
@@ -62,13 +68,12 @@ class MockPersistenceLayer : public TestPersistenceLayer {
 template<typename MutexT>
 class LRUPersistentCacheTest : public Test {
   protected:
-    virtual void SetUp() override {
-      persistence = make_unique<MockPersistenceLayer>();
-      ON_CALL(*persistence, getLastPersistedVersion())
-        .WillByDefault(
-            Invoke(
-              persistence.get(),
-              &MockPersistenceLayer::getLastPersistedVersionConcrete));
+   void SetUp() override {
+     persistence = make_unique<MockPersistenceLayer>();
+     ON_CALL(*persistence, getLastPersistedVersion())
+         .WillByDefault(Invoke(
+             persistence.get(),
+             &MockPersistenceLayer::getLastPersistedVersionConcrete));
     }
 
     unique_ptr<MockPersistenceLayer> persistence;
@@ -78,8 +83,8 @@ TYPED_TEST(LRUPersistentCacheTest, NullPersistence) {
   // make sure things sync even without a persistence layer
   auto cache = createCache<TypeParam>(10, 1, nullptr);
   cache->put("k0", "v0");
-  makeFuture().delayed(chrono::milliseconds(20))
-    .then([cache, this]{
+  makeFuture().delayed(std::chrono::milliseconds(20))
+    .then([cache]{
         auto val = cache->get("k0");
         EXPECT_TRUE(val);
         EXPECT_EQ(*val, "v0");
@@ -88,7 +93,7 @@ TYPED_TEST(LRUPersistentCacheTest, NullPersistence) {
 }
 
 MATCHER_P(DynSize, n, "") {
-  return n == arg.size();
+  return size_t(n) == arg.size();
 }
 
 TYPED_TEST(LRUPersistentCacheTest, SettingPersistence) {
@@ -142,7 +147,7 @@ TYPED_TEST(LRUPersistentCacheTest, SetPersistenceMidPersist) {
     .WillOnce(Invoke(func));
 
   cache->setPersistence(std::move(this->persistence));
-  makeFuture().delayed(chrono::milliseconds(100)).get();
+  makeFuture().delayed(std::chrono::milliseconds(100)).get();
 }
 
 TYPED_TEST(LRUPersistentCacheTest, PersistNotCalled) {

@@ -1,13 +1,18 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 #pragma once
 
 #include <folly/SocketAddress.h>
@@ -26,6 +31,7 @@ namespace wangle {
 template <typename P = DefaultPipeline>
 class BaseClientBootstrap {
  public:
+  using Ptr = std::unique_ptr<BaseClientBootstrap>;
   BaseClientBootstrap() {}
 
   virtual ~BaseClientBootstrap() = default;
@@ -40,7 +46,6 @@ class BaseClientBootstrap {
     return pipeline_.get();
   }
 
-  // wangle client bootstrap connect
   virtual folly::Future<P*> connect(
       const folly::SocketAddress& address,
       std::chrono::milliseconds timeout = std::chrono::milliseconds(0)) = 0;
@@ -55,7 +60,16 @@ class BaseClientBootstrap {
     return this;
   }
 
-  void makePipeline(std::shared_ptr<folly::AsyncSocket> socket) {
+  BaseClientBootstrap* deferSecurityNegotiation(bool deferSecurityNegotiation) {
+    deferSecurityNegotiation_ = deferSecurityNegotiation;
+    return this;
+  }
+
+  void setPipeline(const typename P::Ptr& pipeline) {
+    pipeline_ = pipeline;
+  }
+
+  virtual void makePipeline(std::shared_ptr<folly::AsyncSocket> socket) {
     pipeline_ = pipelineFactory_->newPipeline(socket);
   }
 
@@ -64,5 +78,14 @@ class BaseClientBootstrap {
   typename P::Ptr pipeline_;
   folly::SSLContextPtr sslContext_;
   SSL_SESSION* sslSession_{nullptr};
+  bool deferSecurityNegotiation_{false};
 };
+
+template <typename ClientBootstrap = BaseClientBootstrap<>>
+class BaseClientBootstrapFactory {
+ public:
+  virtual typename ClientBootstrap::Ptr newClient() = 0;
+  virtual ~BaseClientBootstrapFactory() = default;
+};
+
 } // namespace wangle

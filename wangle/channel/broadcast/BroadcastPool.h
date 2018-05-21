@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #pragma once
 
@@ -51,15 +57,14 @@ class BroadcastPool {
 
     BroadcastManager(
         BroadcastPool<T, R, P>* broadcastPool,
-        const R& routingData,
-        std::unique_ptr<BaseClientBootstrap<P>> client)
+        const R& routingData)
         : broadcastPool_(broadcastPool),
           routingData_(routingData),
-          client_(std::move(client)) {
+          client_(broadcastPool_->clientBootstrapFactory_->newClient()) {
       client_->pipelineFactory(broadcastPool_->broadcastPipelineFactory_);
     }
 
-    virtual ~BroadcastManager() {
+    ~BroadcastManager() override {
       if (client_->getPipeline()) {
         client_->getPipeline()->setPipelineManager(nullptr);
       }
@@ -85,8 +90,12 @@ class BroadcastPool {
 
   BroadcastPool(
       std::shared_ptr<ServerPool<R, P>> serverPool,
-      std::shared_ptr<BroadcastPipelineFactory<T, R>> pipelineFactory)
-      : serverPool_(serverPool), broadcastPipelineFactory_(pipelineFactory) {}
+      std::shared_ptr<BroadcastPipelineFactory<T, R>> pipelineFactory,
+      std::shared_ptr<BaseClientBootstrapFactory<>> clientFactory =
+          std::make_shared<ClientBootstrapFactory>())
+      : serverPool_(serverPool),
+        broadcastPipelineFactory_(pipelineFactory),
+        clientBootstrapFactory_(clientFactory) {}
 
   virtual ~BroadcastPool() {}
 
@@ -109,6 +118,9 @@ class BroadcastPool {
    *
    * Caller should immediately subscribe to the returned BroadcastHandler
    * to prevent it from being garbage collected.
+   * Note that to ensure that this works correctly, the returned future
+   * completes on an InlineExecutor such that .then will be called inline with
+   * satisfaction of the underlying promise.
    */
   virtual folly::Future<BroadcastHandler<T, R>*> getHandler(
       const R& routingData);
@@ -120,11 +132,14 @@ class BroadcastPool {
     return (broadcasts_.find(routingData) != broadcasts_.end());
   }
 
- private:
-  void deleteBroadcast(const R& routingData) { broadcasts_.erase(routingData); }
+  virtual void deleteBroadcast(const R& routingData) {
+    broadcasts_.erase(routingData);
+  }
 
+ private:
   std::shared_ptr<ServerPool<R, P>> serverPool_;
   std::shared_ptr<BroadcastPipelineFactory<T, R>> broadcastPipelineFactory_;
+  std::shared_ptr<BaseClientBootstrapFactory<>> clientBootstrapFactory_;
   std::map<R, typename BroadcastManager::UniquePtr> broadcasts_;
 };
 

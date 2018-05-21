@@ -1,14 +1,22 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 #include <gflags/gflags.h>
 
+#include <folly/init/Init.h>
 #include <wangle/bootstrap/AcceptRoutingHandler.h>
 #include <wangle/bootstrap/RoutingDataHandler.h>
 #include <wangle/bootstrap/ServerBootstrap.h>
@@ -60,7 +68,7 @@ DEFINE_int32(upstream_port, 8081, "Upstream server port");
  */
 class ByteToStringDecoder : public ByteToMessageDecoder<std::string> {
  public:
-  bool decode(Context* ctx,
+  bool decode(Context*,
               IOBufQueue& buf,
               std::string& result,
               size_t&) override {
@@ -126,7 +134,7 @@ class SimpleServerPool : public ServerPool<std::string> {
  public:
   Future<DefaultPipeline*> connect(
       BaseClientBootstrap<DefaultPipeline>* client,
-      const std::string& routingData) noexcept override {
+      const std::string& /* routingData */) noexcept override {
     SocketAddress address;
     address.setFromLocalPort(FLAGS_upstream_port);
 
@@ -160,8 +168,9 @@ class SimpleBroadcastPipelineFactory
     return pipeline->getHandler<BroadcastHandler<std::string, std::string>>();
   }
 
-  void setRoutingData(DefaultPipeline* pipeline,
-                      const std::string& routingData) noexcept override {}
+  void setRoutingData(
+      DefaultPipeline* /* pipeline */,
+      const std::string& /* routingData */) noexcept override {}
 };
 
 using SimpleObservingPipeline = ObservingPipeline<std::string>;
@@ -184,7 +193,7 @@ class SimpleObservingPipelineFactory
   SimpleObservingPipeline::Ptr newPipeline(
       std::shared_ptr<AsyncSocket> socket,
       const std::string& routingData,
-      RoutingDataHandler<std::string>* routingHandler,
+      RoutingDataHandler<std::string>*,
       std::shared_ptr<TransportInfo> transportInfo) override {
     LOG(INFO) << "Creating a new ObservingPipeline for client "
               << *(transportInfo->remoteAddr);
@@ -201,7 +210,7 @@ class SimpleObservingPipelineFactory
 };
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  folly::Init init(&argc, &argv);
 
   auto serverPool = std::make_shared<SimpleServerPool>();
 
