@@ -111,7 +111,7 @@ class EchoPipelineFactory : public PipelineFactory<EchoPipeline> {
 };
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   ServerBootstrap<EchoPipeline> server;
   server.childPipeline(std::make_shared<EchoPipelineFactory>());
@@ -221,10 +221,10 @@ class EchoPipelineFactory : public PipelineFactory<EchoPipeline> {
 };
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   ClientBootstrap<EchoPipeline> client;
-  client.group(std::make_shared<wangle::IOThreadPoolExecutor>(1));
+  client.group(std::make_shared<folly::IOThreadPoolExecutor>(1));
   client.pipelineFactory(std::make_shared<EchoPipelineFactory>());
   auto pipeline = client.connect(SocketAddress(FLAGS_host, FLAGS_port)).get();
 

@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #pragma once
 
@@ -13,8 +19,10 @@
 #include <wangle/ssl/SSLUtil.h>
 
 #include <chrono>
-#include <netinet/tcp.h>
 #include <string>
+
+#include <folly/SocketAddress.h>
+#include <folly/portability/Sockets.h>
 
 namespace folly {
 
@@ -62,9 +70,24 @@ struct TransportInfo {
   std::chrono::microseconds rtt{0};
 
   /*
-   *  the estimated ratio of packet retransmisions in current socket
+   * RTT variance in usecs (microseconds)
    */
-  double rtx{-1};
+  int64_t rtt_var{-1};
+
+  /*
+   * the total number of packets retransmitted during the connection lifetime.
+   */
+  int64_t rtx{-1};
+
+  /*
+   * the number of packets retransmitted due to timeout
+   */
+  int64_t rtx_tm{-1};
+
+  /*
+   * retransmission timeout (usec)
+   */
+  int64_t rto{-1};
 
   /*
    * The congestion window size in MSS
@@ -72,22 +95,30 @@ struct TransportInfo {
   int64_t cwnd{-1};
 
   /*
+   * The congestion window size in bytes
+   */
+  int64_t cwndBytes{-1};
+
+  /*
    * MSS
    */
   int64_t mss{-1};
 
-#if defined(__linux__) || defined(__FreeBSD__)
+  /*
+   * slow start threshold
+   */
+  int64_t ssthresh{-1};
+
+#ifdef __APPLE__
+  typedef tcp_connection_info tcp_info;
+#endif
+
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
   /*
    * TCP information as fetched from getsockopt(2)
    */
-  tcp_info tcpinfo {
-#if __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 17
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 // 32
-#else
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 // 29
-#endif  // __GLIBC__ >= 2 && __GLIBC_MINOR__ >= 17
-  };
-#endif  // defined(__linux__) || defined(__FreeBSD__)
+  tcp_info tcpinfo {};
+#endif  // defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
 
   /*
    * time for setting the connection, from the moment in was accepted until it
@@ -143,6 +174,11 @@ struct TransportInfo {
   std::shared_ptr<std::string> sslClientSigAlgs{nullptr};
 
   /*
+   * list of supported versions sent by client in supported versions extension
+   */
+  std::shared_ptr<std::string> sslClientSupportedVersions{nullptr};
+
+  /*
    * hash of all the SSL parameters sent by the client
    */
   std::shared_ptr<std::string> sslSignature{nullptr};
@@ -158,9 +194,9 @@ struct TransportInfo {
   std::shared_ptr<std::string> guessedUserAgent{nullptr};
 
   /**
-   * The result of SSL NPN negotiation.
+   * The application protocol running on the transport (h2, etc.)
    */
-  std::shared_ptr<std::string> sslNextProtocol{nullptr};
+  std::shared_ptr<std::string> appProtocol{nullptr};
 
   /*
    * total number of bytes sent over the connection
@@ -332,7 +368,7 @@ struct TransportInfo {
   /**
    * What is providing the security.
    */
-  SecureTransportType securityType{SecureTransportType::NONE};
+  std::string securityType;
 
   /*
    * Additional protocol info.
@@ -344,6 +380,19 @@ struct TransportInfo {
    * raw signature (that gives the hash).
    */
   std::shared_ptr<std::string> tcpSignature{nullptr};
+
+  /*
+   * Whether or not TCP fast open succeded on this connection. Failure can occur
+   * due to several reasons, including cookies not matching or TFO not being
+   * advertised by the client.
+   */
+  bool tfoSucceded{false};
+
+  /*
+   * Stores the TokenBindingKeyParameter that was negotiatied during the
+   * handshake. Needed for the validation step of Token Binding.
+   */
+  folly::Optional<uint8_t> negotiatedTokenBindingKeyParameters;
 
   /*
    * get the RTT value in milliseconds
@@ -363,11 +412,11 @@ struct TransportInfo {
    */
   static int64_t readRTT(const folly::AsyncSocket* sock);
 
-#if defined(__linux__) || defined(__FreeBSD__)
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
   /*
    * perform the getsockopt(2) syscall to fetch TCP info for a given socket
    */
-  static bool readTcpInfo(struct tcp_info* tcpinfo,
+  static bool readTcpInfo(tcp_info* tcpinfo,
                           const folly::AsyncSocket* sock);
 #endif
 };

@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #pragma once
 
@@ -15,7 +21,11 @@ template <typename T, typename R, typename P>
 folly::Future<BroadcastHandler<T, R>*>
 BroadcastPool<T, R, P>::BroadcastManager::getHandler() {
   // getFuture() returns a completed future if we are already connected
-  auto future = sharedPromise_.getFuture();
+  // Set the executor to the InlineExecutor because subsequent code depends
+  // on the future callback being called inline to ensure that the handler
+  // is not garbage collected before use.
+  auto future = sharedPromise_.getFuture().via(
+    &folly::InlineExecutor::instance());
 
   if (connectStarted_) {
     // Either already connected, in which case the future has the handler,
@@ -89,11 +99,15 @@ folly::Future<BroadcastHandler<T, R>*> BroadcastPool<T, R, P>::getHandler(
     return iter->second->getHandler();
   }
 
-  typename BroadcastManager::UniquePtr broadcast(new BroadcastManager(
-      this, routingData, folly::make_unique<ClientBootstrap<P>>()));
+  typename BroadcastManager::UniquePtr broadcast(
+      new BroadcastManager(this, routingData));
+
   auto broadcastPtr = broadcast.get();
   broadcasts_.insert(std::make_pair(routingData, std::move(broadcast)));
 
+  // The executor on this future is set to be an InlineExecutor to ensure that
+  // the continuation can be run inline and satisfy the lifetime requirement
+  // on the return value of this function.
   return broadcastPtr->getHandler();
 }
 

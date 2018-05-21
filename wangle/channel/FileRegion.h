@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #pragma once
 
@@ -15,7 +21,7 @@
 #include <folly/io/async/NotificationQueue.h>
 #include <folly/futures/Future.h>
 #include <folly/futures/Promise.h>
-#include <wangle/concurrent/IOThreadPoolExecutor.h>
+#include <folly/executors/IOThreadPoolExecutor.h>
 
 #ifdef SPLICE_F_NONBLOCK
 namespace wangle {
@@ -44,7 +50,7 @@ class FileRegion {
       delete this;
     }
 
-    void writeErr(size_t bytesWritten,
+    void writeErr(size_t /* bytesWritten */,
                   const folly::AsyncSocketException& ex)
       noexcept override {
       promise_.setException(ex);
@@ -73,7 +79,7 @@ class FileRegion {
 
     bool isComplete() override;
 
-    void messageAvailable(size_t&& count) override;
+    void messageAvailable(size_t&& count) noexcept override;
 
     void start() override;
 
@@ -81,7 +87,7 @@ class FileRegion {
      public:
       FileReadHandler(FileWriteRequest* req, int pipe_in, size_t bytesToRead);
 
-      ~FileReadHandler();
+      ~FileReadHandler() override;
 
       void handlerReady(uint16_t events) noexcept override;
 
@@ -92,7 +98,7 @@ class FileRegion {
     };
 
    private:
-    ~FileWriteRequest();
+    ~FileWriteRequest() override;
 
     void fail(const char* fn, const folly::AsyncSocketException& ex);
 

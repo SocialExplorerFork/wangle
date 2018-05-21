@@ -1,11 +1,17 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ * Copyright 2017-present Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include <wangle/acceptor/Acceptor.h>
 
@@ -13,16 +19,14 @@
 #include <wangle/ssl/SSLContextManager.h>
 #include <wangle/acceptor/AcceptorHandshakeManager.h>
 #include <wangle/acceptor/SecurityProtocolContextManager.h>
-#include <fcntl.h>
-#include <folly/ScopeGuard.h>
 #include <folly/io/async/EventBase.h>
-#include <fstream>
-#include <sys/types.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/AsyncSocket.h>
+#include <folly/portability/GFlags.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
-#include <gflags/gflags.h>
+
+#include <fstream>
 
 using folly::AsyncSocket;
 using folly::AsyncSSLSocket;
@@ -53,8 +57,6 @@ void
 Acceptor::init(AsyncServerSocket* serverSocket,
                EventBase* eventBase,
                SSLStats* stats) {
-  CHECK(nullptr == this->base_ || eventBase == this->base_);
-
   if (accConfig_.isSSL()) {
     if (accConfig_.allowInsecureConnectionsOnSecureServer) {
       securityProtocolCtxManager_.addPeeker(&tlsPlaintextPeekingCallback_);
@@ -62,7 +64,7 @@ Acceptor::init(AsyncServerSocket* serverSocket,
     securityProtocolCtxManager_.addPeeker(&defaultPeekingCallback_);
 
     if (!sslCtxManager_) {
-      sslCtxManager_ = folly::make_unique<SSLContextManager>(
+      sslCtxManager_ = std::make_unique<SSLContextManager>(
         eventBase,
         "vip_" + getName(),
         accConfig_.strictSSL, stats);
@@ -75,22 +77,22 @@ Acceptor::init(AsyncServerSocket* serverSocket,
           &accConfig_.initialTicketSeeds,
           accConfig_.bindAddress,
           cacheProvider_);
-        parseClientHello_ |= sslCtxConfig.clientHelloParsingEnabled;
       }
 
       CHECK(sslCtxManager_->getDefaultSSLCtx());
     } catch (const std::runtime_error& ex) {
-      sslCtxManager_->clear();
-      // This is not a Not a fatal error, but useful to know.
-      LOG(INFO) << "Failed to configure TLS. This is not a fatal error. "
-                << ex.what();
+      if (accConfig_.strictSSL) {
+        throw;
+      } else {
+        sslCtxManager_->clear();
+        // This is not a Not a fatal error, but useful to know.
+        LOG(INFO) << "Failed to configure TLS. This is not a fatal error. "
+                  << ex.what();
+      }
     }
   }
-  base_ = eventBase;
-  state_ = State::kRunning;
-  downstreamConnectionManager_ = ConnectionManager::makeUnique(
-    eventBase, accConfig_.connectionIdleTimeout, this);
 
+  initDownstreamConnectionManager(eventBase);
   if (serverSocket) {
     serverSocket->addAcceptCallback(this, eventBase);
 
@@ -105,11 +107,19 @@ Acceptor::init(AsyncServerSocket* serverSocket,
   }
 }
 
+void Acceptor::initDownstreamConnectionManager(EventBase* eventBase) {
+  CHECK(nullptr == this->base_ || eventBase == this->base_);
+  base_ = eventBase;
+  state_ = State::kRunning;
+  downstreamConnectionManager_ = ConnectionManager::makeUnique(
+    eventBase, accConfig_.connectionIdleTimeout, this);
+}
+
 void Acceptor::resetSSLContextConfigs() {
   try {
     sslCtxManager_->resetSSLContextConfigs(accConfig_.sslContextConfigs,
                                            accConfig_.sslCacheOptions,
-                                           &accConfig_.initialTicketSeeds,
+                                           nullptr,
                                            accConfig_.bindAddress,
                                            cacheProvider_);
   } catch (const std::runtime_error& ex) {
@@ -131,6 +141,16 @@ void Acceptor::addSSLContextConfig(const SSLContextConfig& sslCtxConfig) {
                                       cacheProvider_);
 }
 
+void Acceptor::setTLSTicketSecrets(
+    const std::vector<std::string>& oldSecrets,
+    const std::vector<std::string>& currentSecrets,
+    const std::vector<std::string>& newSecrets) {
+  if (sslCtxManager_) {
+    sslCtxManager_->reloadTLSTicketKeys(
+        oldSecrets, currentSecrets, newSecrets);
+  }
+}
+
 void
 Acceptor::drainAllConnections() {
   if (downstreamConnectionManager_) {
@@ -150,12 +170,13 @@ bool Acceptor::canAccept(const SocketAddress& address) {
     return true;
   }
 
-  uint64_t maxConnections = connectionCounter_->getMaxConnections();
-  if (maxConnections == 0) {
+  const auto totalConnLimit = loadShedConfig_.getMaxConnections();
+  if (totalConnLimit == 0) {
     return true;
   }
 
   uint64_t currentConnections = connectionCounter_->getNumConnections();
+  uint64_t maxConnections = getWorkerMaxConnections();
   if (currentConnections < maxConnections) {
     return true;
   }
@@ -166,15 +187,20 @@ bool Acceptor::canAccept(const SocketAddress& address) {
 
   // Take care of the connection counts across all acceptors.
   // Expensive since a lock must be taken to get the counter.
-  const auto activeConnLimit = loadShedConfig_.getMaxActiveConnections();
-  const auto totalConnLimit = loadShedConfig_.getMaxConnections();
-  const auto activeConnCount = getActiveConnectionCountForLoadShedding();
-  const auto totalConnCount = getConnectionCountForLoadShedding();
 
-  bool activeConnExceeded =
-      (activeConnLimit > 0) && (activeConnCount >= activeConnLimit);
-  bool totalConnExceeded =
-      (totalConnLimit > 0) && (totalConnCount >= totalConnLimit);
+  // getConnectionCountForLoadShedding() call can be very expensive,
+  // don't call it if you are not going to use the results.
+  const auto totalConnExceeded =
+    totalConnLimit > 0 && getConnectionCountForLoadShedding() >= totalConnLimit;
+
+  const auto activeConnLimit = loadShedConfig_.getMaxActiveConnections();
+  // getActiveConnectionCountForLoadShedding() call can be very expensive,
+  // don't call it if you are not going to use the results.
+  const auto activeConnExceeded =
+    !totalConnExceeded &&
+    activeConnLimit > 0 &&
+    getActiveConnectionCountForLoadShedding() >= activeConnLimit;
+
   if (!activeConnExceeded && !totalConnExceeded) {
     return true;
   }
@@ -186,10 +212,11 @@ bool Acceptor::canAccept(const SocketAddress& address) {
 void
 Acceptor::connectionAccepted(
     int fd, const SocketAddress& clientAddr) noexcept {
+  namespace fsp = folly::portability::sockets;
   if (!canAccept(clientAddr)) {
     // Send a RST to free kernel memory faster
     struct linger optLinger = {1, 0};
-    ::setsockopt(fd, SOL_SOCKET, SO_LINGER, &optLinger, sizeof(optLinger));
+    fsp::setsockopt(fd, SOL_SOCKET, SO_LINGER, &optLinger, sizeof(optLinger));
     close(fd);
     return;
   }
@@ -237,6 +264,8 @@ Acceptor::processEstablishedConnection(
       sslConnectionError(ex);
       return;
     }
+
+    tinfo.tfoSucceded = sslSock->getTFOSucceded();
     startHandshakeManager(
         std::move(sslSock),
         this,
@@ -247,6 +276,7 @@ Acceptor::processEstablishedConnection(
     tinfo.secure = false;
     tinfo.acceptTime = acceptTime;
     AsyncSocket::UniquePtr sock(makeNewAsyncSocket(base_, fd));
+    tinfo.tfoSucceded = sock->getTFOSucceded();
     plaintextConnectionReady(
         std::move(sock),
         clientAddr,
@@ -258,7 +288,7 @@ Acceptor::processEstablishedConnection(
 
 void Acceptor::startHandshakeManager(
     AsyncSSLSocket::UniquePtr sslSock,
-    Acceptor* acceptor,
+    Acceptor*,
     const SocketAddress& clientAddr,
     std::chrono::steady_clock::time_point acceptTime,
     TransportInfo& tinfo) noexcept {
@@ -280,12 +310,15 @@ Acceptor::connectionReady(
   auto asyncSocket = sock->getUnderlyingTransport<AsyncSocket>();
   asyncSocket->setMaxReadsPerEvent(16);
   tinfo.initWithSocket(asyncSocket);
-  onNewConnection(
+  tinfo.appProtocol = std::make_shared<std::string>(nextProtocolName);
+  if (state_ < State::kDraining) {
+    onNewConnection(
       std::move(sock),
       &clientAddr,
       nextProtocolName,
       secureTransportType,
       tinfo);
+  }
 }
 
 void Acceptor::plaintextConnectionReady(
@@ -322,7 +355,7 @@ Acceptor::sslConnectionReady(AsyncTransportWrapper::UniquePtr sock,
   }
 }
 
-void Acceptor::sslConnectionError(const folly::exception_wrapper& ex) {
+void Acceptor::sslConnectionError(const folly::exception_wrapper&) {
   CHECK(numPendingSSLConns_ > 0);
   --numPendingSSLConns_;
   --totalNumPendingSSLConns_;
@@ -358,7 +391,7 @@ Acceptor::acceptStopped() noexcept {
 }
 
 void
-Acceptor::onEmpty(const ConnectionManager& cm) {
+Acceptor::onEmpty(const ConnectionManager&) {
   VLOG(3) << "Acceptor=" << this << " onEmpty()";
   if (state_ == State::kDraining) {
     checkDrained();
@@ -387,9 +420,9 @@ Acceptor::checkDrained() {
 void
 Acceptor::drainConnections(double pctToDrain) {
   if (downstreamConnectionManager_) {
-    VLOG(3) << "Dropping " << pctToDrain * 100 << "% of "
-            << getNumConnections() << " connections from Acceptor=" << this
-            << " in thread " << base_;
+    LOG(INFO) << "Draining " << pctToDrain * 100 << "% of "
+              << getNumConnections() << " connections from Acceptor=" << this
+              << " in thread " << base_;
     assert(base_->isInEventBaseThread());
     downstreamConnectionManager_->
       drainConnections(pctToDrain, gracefulShutdownTimeout_);
@@ -415,8 +448,8 @@ Acceptor::forceStop() {
 void
 Acceptor::dropAllConnections() {
   if (downstreamConnectionManager_) {
-    VLOG(3) << "Dropping all connections from Acceptor=" << this <<
-      " in thread " << base_;
+    LOG(INFO) << "Dropping all connections from Acceptor=" << this
+              << " in thread " << base_;
     assert(base_->isInEventBaseThread());
     forceShutdownInProgress_ = true;
     downstreamConnectionManager_->dropAllConnections();
@@ -427,6 +460,20 @@ Acceptor::dropAllConnections() {
 
   state_ = State::kDone;
   onConnectionsDrained();
+}
+
+void
+Acceptor::dropConnections(double pctToDrop) {
+  base_->runInEventBaseThread([&, pctToDrop] {
+    if (downstreamConnectionManager_) {
+      LOG(INFO) << "Dropping " << pctToDrop * 100 << "% of "
+                << getNumConnections() << " connections from Acceptor=" << this
+                << " in thread " << base_;
+      assert(base_->isInEventBaseThread());
+      forceShutdownInProgress_ = true;
+      downstreamConnectionManager_->dropConnections(pctToDrop);
+    }
+  });
 }
 
 } // namespace wangle
